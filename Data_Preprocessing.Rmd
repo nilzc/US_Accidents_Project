@@ -1,0 +1,134 @@
+---
+title: "Data Pre-processing"
+author: "Zhuocheng Lin"
+date: "3/18/2020"
+output: pdf_document
+---
+# Packages
+```{r message=FALSE}
+library(tidyverse)
+library(modelr)
+library(lubridate)
+library(caret)
+```
+
+# Read data
+```{r message=FALSE}
+df <- read_csv('./US_Accidents_Dec19.csv', col_types = cols(.default = col_character())) %>% type_convert()
+```
+
+# Drop variables with high NA proportion (over 50%)
+```{r}
+df %>% summarise_all(~ mean(is.na(.))) %>% 
+  pivot_longer(1:49, names_to = "variable", values_to = "NA_prop") %>% 
+  filter(NA_prop >= 0.5)
+
+drop_na_cols <- c("End_Lat", "End_Lng", "Number", "Wind_Chill(F)", "Precipitation(in)")
+```
+
+# Drop unuseful variable
+```{r message=FALSE}
+# these variables are not useful in predicting Severity
+not_useful <- c("ID", "Source", "Timezone", "Airport_Code", "Weather_Timestamp", "Wind_Direction", "Country", "Description")
+
+# Not so sure about whether Wind_Direction is useful
+# to me, the relation seems weak
+df %>% ggplot(aes(Wind_Direction, ..prop..)) +
+    geom_bar(aes(group = Severity, fill = Severity)) +
+    coord_flip() +
+    labs(title = "Wind_Direction distribution in each level")
+
+df_drop <- df %>% select(-drop_na_cols, -not_useful) 
+```
+
+# Rename variables to avoid potential error
+```{r}
+df_drop <-  df_drop %>%
+  rename("Distance" = `Distance(mi)`, "Temperature" = `Temperature(F)`, "Humidity" = `Humidity(%)`, 
+         "Pressure" = `Pressure(in)`, "Visibility" = `Visibility(mi)`, "Wind_Speed" = `Wind_Speed(mph)`)
+```
+
+# Pre-processing time related variables
+```{r}
+df_time <- df_drop %>%
+  mutate(Duration = as.numeric(End_Time - Start_Time)) %>%
+  # accident duration should be positive
+  filter(!(Duration < 0)) %>%
+  separate(Start_Time, into = c("Date", "Time"), sep = " ") %>%
+  mutate("Year" = str_sub(Date, 1, 4), "Month" = str_sub(Date, 6, 7), "Day" = str_sub(Date, 9, 10), "Wday" = as.character(wday(Date)), "Hour" = str_sub(Time, 1, 2)) %>%
+  select(-c("Date", "Time", "End_Time")) %>%
+  select(TMC, Severity, Year, Month, Day, Hour, Wday, Duration, everything())
+head(df_time)
+```
+
+# Address
+```{r message=FALSE}
+# not sure the best way to deal with address
+# my opinion is we can choose one state data, and build the model
+# and ignore Street, County and City
+address <- c("Street", "County", "City", "Zipcode")
+df_add <- df_time %>% select(-address)
+```
+
+# Drop missing Weather_Condition
+```{r}
+# when Weather_Condition is missing, 
+# other variables related to weather will be missing too (most cases)
+df_add %>% filter(is.na(Weather_Condition)) %>% select(Temperature:Weather_Condition)
+df_add %>% filter(is.na(Weather_Condition)) %>% select(Temperature:Weather_Condition) %>% summarise_all(~sum(is.na(.)))
+# we can drop observations whose Weather_Condition is missing
+df_weather <- df_add %>% filter(!is.na(Weather_Condition))
+```
+
+# Format
+```{r}
+df_weather <- df_weather %>% 
+  mutate(TMC = as.character(TMC)) %>% 
+  mutate_if(is.logical, as.character)
+```
+
+# Replace NA with mean
+```{r}
+df_mean <- df_weather %>%
+  mutate_if(is.numeric, ~ replace_na(., mean(., na.rm = T)))
+summary(df_mean)
+```
+
+# TMC
+```{r}
+# most TMC NAs are in level 4
+df_mean %>% 
+  ggplot(aes(TMC, ..prop..)) +
+    geom_bar(aes(group = Severity, fill = Severity)) +
+    labs(title = "TMC distribution in each severity level")
+
+df_mean %>% 
+  ggplot(aes(TMC, ..prop..)) +
+    geom_bar(aes(group = Severity, fill = Severity)) +
+    labs(title = "TMC distribution in each severity level") +
+    coord_cartesian(ylim = c(0, 0.25))
+# my opinion is TMC NA can be considered as an important feature of Severity
+# we can treate NA as a new TMC code
+df_TMC <- df_mean %>%
+  mutate(TMC = replace_na(TMC, "NA"))
+```
+
+# Final check if there is unusual observation
+```{r}
+df_TMC %>% summarise_all(~sum(is.na(.))) %>% pivot_longer(everything(), names_to = "variable", values_to = "NAs") %>% filter(NAs > 0)
+# Side has 1 NA, remove it
+# variables related to daylight all have 80 NAs
+
+df_TMC %>% filter(is.na(Sunrise_Sunset)) %>% count(TMC)
+# the missing daylight data may be related to missing TMC
+# replace them with a new levle "NAs"
+df_final <- df_TMC %>%
+  filter(!is.na(Side)) %>%
+  mutate_at(vars(Sunrise_Sunset:Astronomical_Twilight), ~ replace_na(., "NA"))
+```
+
+# Write csv file
+```{r}
+# write_csv(df_final, "./tidy.csv")
+```
+
