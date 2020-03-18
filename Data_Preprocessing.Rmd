@@ -4,6 +4,7 @@ author: "Zhuocheng Lin"
 date: "3/18/2020"
 output: pdf_document
 ---
+
 # Packages
 ```{r message=FALSE}
 library(tidyverse)
@@ -13,8 +14,9 @@ library(caret)
 ```
 
 # Read data
-```{r message=FALSE}
-df <- read_csv('./US_Accidents_Dec19.csv', col_types = cols(.default = col_character())) %>% type_convert()
+```{r message=FALSE, cache=TRUE}
+df <- read_csv('./US_Accidents_Dec19.csv', col_types = cols(.default = col_character())) %>% 
+  type_convert()
 ```
 
 # Drop variables with high NA proportion (over 50%)
@@ -29,7 +31,8 @@ drop_na_cols <- c("End_Lat", "End_Lng", "Number", "Wind_Chill(F)", "Precipitatio
 # Drop unuseful variable
 ```{r message=FALSE}
 # these variables are not useful in predicting Severity
-not_useful <- c("ID", "Source", "Timezone", "Airport_Code", "Weather_Timestamp", "Wind_Direction", "Country", "Description")
+not_useful <- c("ID", "Source", "Timezone", "Airport_Code", "Weather_Timestamp", 
+                "Wind_Direction", "Country", "Description")
 
 # Not so sure about whether Wind_Direction is useful
 # to me, the relation seems weak
@@ -55,7 +58,8 @@ df_time <- df_drop %>%
   # accident duration should be positive
   filter(!(Duration < 0)) %>%
   separate(Start_Time, into = c("Date", "Time"), sep = " ") %>%
-  mutate("Year" = str_sub(Date, 1, 4), "Month" = str_sub(Date, 6, 7), "Day" = str_sub(Date, 9, 10), "Wday" = as.character(wday(Date)), "Hour" = str_sub(Time, 1, 2)) %>%
+  mutate("Year" = str_sub(Date, 1, 4), "Month" = str_sub(Date, 6, 7), "Day" = str_sub(Date, 9, 10), 
+         "Wday" = as.character(wday(Date)), "Hour" = str_sub(Time, 1, 2)) %>%
   select(-c("Date", "Time", "End_Time")) %>%
   select(TMC, Severity, Year, Month, Day, Hour, Wday, Duration, everything())
 head(df_time)
@@ -75,7 +79,8 @@ df_add <- df_time %>% select(-address)
 # when Weather_Condition is missing, 
 # other variables related to weather will be missing too (most cases)
 df_add %>% filter(is.na(Weather_Condition)) %>% select(Temperature:Weather_Condition)
-df_add %>% filter(is.na(Weather_Condition)) %>% select(Temperature:Weather_Condition) %>% summarise_all(~sum(is.na(.)))
+df_add %>% filter(is.na(Weather_Condition)) %>% select(Temperature:Weather_Condition) %>% 
+  summarise_all(~sum(is.na(.)))
 # we can drop observations whose Weather_Condition is missing
 df_weather <- df_add %>% filter(!is.na(Weather_Condition))
 ```
@@ -115,7 +120,8 @@ df_TMC <- df_mean %>%
 
 # Final check if there is unusual observation
 ```{r}
-df_TMC %>% summarise_all(~sum(is.na(.))) %>% pivot_longer(everything(), names_to = "variable", values_to = "NAs") %>% filter(NAs > 0)
+df_TMC %>% summarise_all(~sum(is.na(.))) %>% 
+  pivot_longer(everything(), names_to = "variable", values_to = "NAs") %>% filter(NAs > 0)
 # Side has 1 NA, remove it
 # variables related to daylight all have 80 NAs
 
