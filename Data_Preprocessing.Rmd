@@ -96,7 +96,7 @@ df_weather <- df_weather %>%
 ```{r}
 df_mean <- df_weather %>%
   mutate_if(is.numeric, ~ replace_na(., mean(., na.rm = T)))
-summary(df_mean)
+summary(df_mean %>% select_if(is.numeric))
 ```
 
 # TMC
@@ -130,7 +130,7 @@ df_TMC %>% filter(is.na(Sunrise_Sunset)) %>% count(TMC)
 # replace them with a new levle "NAs"
 df_final <- df_TMC %>%
   filter(!is.na(Side)) %>%
-  mutate_at(vars(Sunrise_Sunset:Astronomical_Twilight), ~ replace_na(., "NA"))
+  filter(!is.na(Sunrise_Sunset))
 ```
 
 # Write csv file
