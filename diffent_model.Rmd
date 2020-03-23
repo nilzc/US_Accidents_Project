@@ -1,0 +1,156 @@
+---
+title: "Different Models"
+author: "Zhuocheng Lin"
+date: "3/22/2020"
+output: pdf_document
+---
+
+# 1. Packages
+```{r message=FALSE}
+library(tidyverse)
+library(modelr)
+library(caret)
+library(ROSE)
+library(randomForest)
+library(glmnet)
+```
+
+# 2. Data pre-processing
+## (1) Read data
+```{r cache=TRUE, message=FALSE}
+df <- read_csv("./tidy.csv", col_types = cols(.default = col_character())) %>% 
+  type_convert()
+```
+
+## (2) Specify factors
+```{r}
+df_format <- df %>%
+  mutate(TMC = factor(TMC), Severity = factor(Severity), Year = factor(Year), Wday = factor(Wday)) %>%
+  mutate_if(is.logical, factor) %>%
+  mutate_if(is.character, factor)
+```
+
+## (3) Narrow down to one State
+```{r}
+df_format %>% count(State) %>% arrange(desc(n))
+# choose TX as the target State
+df_TX <- df_format %>% filter(State == "TX") %>% select(-State)
+```
+
+## (4) Remove unuseful variables
+```{r}
+# remove variables with only 1 distinct value 
+df_TX %>% summarise_all(~ n_distinct(.)) %>% 
+  pivot_longer(everything(), names_to = "variable", values_to = "n") %>% filter(n == 1)
+df_TX <- df_TX %>% select(-Turning_Loop)
+```
+
+## (5) Drop weather condition levels
+```{r message=FALSE}
+# some Weather_Condition levels only have a few observations
+# which can be a problem when we try to build a model
+df_TX %>% count(Weather_Condition) %>% filter(n < 20) %>% select(Weather_Condition)
+drop_weather <- df_TX %>% count(Weather_Condition) %>% filter(n < 20) %>% select(Weather_Condition)
+drop_weather <- drop_weather$Weather_Condition %>% unlist()
+df_TX <- df_TX %>% filter(!(Weather_Condition %in% drop_weather))
+df_TX <- df_TX %>% mutate(Weather_Condition = factor(Weather_Condition))
+```
+
+## (6) Add new labels
+```{r}
+# group level 3 and 4 together, as "Severe"
+# group level 1 and 2 together, as "Not Severe"
+df_label <- df_TX %>%
+  mutate("Status" = factor(ifelse(Severity == "3" | Severity == "4", "Severe", "Not Severe"), 
+                           levels = c("Not Severe", "Severe")))
+df_label %>% select(Severity, Status)
+```
+## (7) Near Zero-Variance Predictors
+```{r message=FALSE}
+# these variable may become zero-variance when the data are split into subsets
+# remove them
+nzv <- nearZeroVar(df_label, saveMetrics = T)
+nzv[nzv$nzv,]
+nzv_cols <- rownames(nzv[nzv$nzv,])
+df_label <- df_label %>%
+  select(-nzv_cols)
+```
+## (8) Partition
+```{r}
+set.seed(1)
+df_parts <- resample_partition(df_label, c(train = 0.6, valid = 0.2, test = 0.2))
+train <- as_tibble(df_parts$train)
+valid <- as_tibble(df_parts$valid)
+test <- as_tibble(df_parts$test)
+# check Weather_Condition levels
+# train should have more levels than valid and test
+tr <- train %>% select(Weather_Condition) %>% distinct()
+va <- valid %>% select(Weather_Condition) %>% distinct()
+te <- test %>% select(Weather_Condition) %>% distinct()
+setdiff(va, tr)
+setdiff(te, tr)
+```
+
+## (9) Sampling
+```{r}
+new_train <- ovun.sample(Status ~ ., 
+                         data = train %>% select(-Severity), 
+                         method = "both", p = 0.5, N = 90000)$data %>% as_tibble()
+table(new_train$Status)
+```
+
+# 3. Use different models to fit the data
+## (1) Sparse Logistic regression
+```{r cache=TRUE}
+x <- model.matrix(Status ~ ., data = new_train)
+model_total <- glmnet(x, new_train$Status, family = "binomial")
+plot(model_total, xvar = "lambda", label = T)
+model_lambda <- cv.glmnet(x, new_train$Status, family = "binomial")
+plot(model_lambda)
+
+# valid dataset
+valid_pred <- valid %>%
+  mutate("pred" = predict(model_lambda, 
+                          newx = model.matrix(Status ~ ., data = valid %>% select(-Severity)), 
+                          s = "lambda.min", type = "response")[,1]) %>%
+  mutate("pred" = ifelse(pred > 0.5, "Severe", "Not Severe"))
+valid_pred %>% select(Status, pred)
+table(valid$Status)
+confusionMatrix(table(valid_pred$Status, valid_pred$pred))
+```
+
+## (2) Random forest
+```{r cache=TRUE}
+model <- randomForest(Status ~ ., data = new_train, mtry = 6, ntree = 500)
+
+# see if ntree = 500 is enough
+error_data <- model$err.rate %>%
+  as_tibble() %>%
+  mutate("Trees" = seq_along(OOB)) %>%
+  pivot_longer(cols = 1:3, names_to = "Type", values_to = "Error")
+
+ggplot(error_data, aes(Trees, Error, color = Type)) +
+  geom_line() +
+  labs(x = "Number of Trees",
+       title = "Error Rate")
+
+# try different mtry 
+oob_values <- vector(length = 15)
+for (i in 1:15) {
+  temp_model <- randomForest(Status ~ ., data = new_train, mtry = i)
+  oob_values[i] <- temp_model$err.rate[nrow(temp_model$err.rate), 1]
+}
+ggplot(tibble("Error" = oob_values), aes(x = 1:length(oob_values), y = Error)) +
+  geom_line(aes(group = 1)) +
+  labs(x = "Number of Variables",
+       title = "Error VS mtry")
+
+# choose mtry = 10 as the best model
+best_model <- randomForest(Status ~ ., data = new_train, mtry = 10, ntree = 500)
+
+valid_pred_rf <- valid %>%
+  add_predictions(best_model)
+table(valid_pred_rf$Status)
+confusionMatrix(valid_pred_rf$Status, valid_pred_rf$pred)
+```
+
