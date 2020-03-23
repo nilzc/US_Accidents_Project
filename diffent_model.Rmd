@@ -13,6 +13,7 @@ library(caret)
 library(ROSE)
 library(randomForest)
 library(glmnet)
+library(rpart)
 ```
 
 # 2. Data pre-processing
@@ -108,7 +109,7 @@ plot(model_total, xvar = "lambda", label = T)
 model_lambda <- cv.glmnet(x, new_train$Status, family = "binomial")
 plot(model_lambda)
 
-# valid dataset
+# use the best lambda
 valid_pred <- valid %>%
   mutate("pred" = predict(model_lambda, 
                           newx = model.matrix(Status ~ ., data = valid %>% select(-Severity)), 
@@ -135,18 +136,18 @@ ggplot(error_data, aes(Trees, Error, color = Type)) +
        title = "Error Rate")
 
 # try different mtry 
-oob_values <- vector(length = 15)
-for (i in 1:15) {
-  temp_model <- randomForest(Status ~ ., data = new_train, mtry = i)
+oob_values <- vector(length = 10)
+for (i in 1:10) {
+  temp_model <- randomForest(Status ~ ., data = new_train, mtry = (i + 5))
   oob_values[i] <- temp_model$err.rate[nrow(temp_model$err.rate), 1]
 }
-ggplot(tibble("Error" = oob_values), aes(x = 1:length(oob_values), y = Error)) +
+ggplot(tibble("Error" = oob_values), aes(x = 6:15, y = Error)) +
   geom_line(aes(group = 1)) +
   labs(x = "Number of Variables",
        title = "Error VS mtry")
 
-# choose mtry = 10 as the best model
-best_model <- randomForest(Status ~ ., data = new_train, mtry = 10, ntree = 500)
+# choose mtry = 12 as the best model
+best_model <- randomForest(Status ~ ., data = new_train, mtry = 12, ntree = 500)
 
 valid_pred_rf <- valid %>%
   add_predictions(best_model)
@@ -154,3 +155,11 @@ table(valid_pred_rf$Status)
 confusionMatrix(valid_pred_rf$Status, valid_pred_rf$pred)
 ```
 
+## (3) Decision tree
+```{r}
+model_decision <- rpart(Status ~ ., data = new_train, method = "class")
+
+valid_pred_dc <- valid %>%
+  mutate(pred = predict(model_decision, valid, type = "class"))
+confusionMatrix(table(valid_pred_dc$Status, valid_pred_dc$pred))
+```
