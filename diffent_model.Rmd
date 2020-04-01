@@ -15,6 +15,7 @@ library(ROSE)
 library(randomForest)
 library(glmnet)
 library(rpart)
+library(BMA)
 ```
 
 # 2. Data pre-processing
@@ -48,7 +49,7 @@ df_TX <- df_TX %>% select(-Turning_Loop)
 ```
 
 ## (5) Drop weather condition/TMC levels
-```{r message=FALSE}
+```{r message=FALSE, fig.height=15}
 # some Weather_Condition levels only have a few observations
 # which can be a problem when we try to build a model
 df_TX %>% count(Weather_Condition) %>% filter(n < 20) %>% select(Weather_Condition)
@@ -192,10 +193,48 @@ ggplot(valid_pred_lm) +
 valid_pred_lm <- valid_pred_lm %>%
   mutate(pred_status = ifelse(pred > 0.5, 1, 0))
 # accuracy
-confusionMatrix(table(valid_pred_lm$Status, valid_pred_lm$pred_status))
+confusionMatrix(table(valid_pred_lm$pred_status, valid_pred_lm$Status))
+```
+## (2) Logistic Regression
+```{r}
+# BIC best model
+# model_bic <- bic.glm(Status ~ ., data = new_train, glm.family = "binomial")
+# saveRDS(model_bic, "./model_bic.rds")
+model_bic <- readRDS("./model_bic.rds")
+variables <- model_bic$label[1] %>% str_split(pattern = ",") %>% unlist()
+bic_best <- glm(Status ~ ., data = new_train %>% select(variables, Status), family = "binomial")
+
+valid_pred <- valid %>%
+  mutate("lg" = predict(bic_best, newdata = valid, type = "response")) %>%
+  mutate("lg" = ifelse(lg > 0.5, "Severe", "Not Severe"))
+valid_pred %>% select(Status, lg)
+table(valid$Status)
+confusionMatrix(table(valid_pred$lg, valid_pred$Status))
+
+# AIC best model
+# model_aic <- glm(Status ~ ., data = new_train, family = "binomial")
+# model_aic <- step(model_aic)
+# saveRDS(model_aic, "./model_aic.rds")
+model_aic <- readRDS("./model_aic.rds")
+# these are the dropped variables
+model_aic$anova
+aic_best <- glm(Status ~ TMC + Side + Traffic_Signal + Hour +
+                  Start_Lat + Distance + Wday + Junction + 
+                  Crossing + Duration + Year + Start_Lng + 
+                  Wind_Speed + Pressure + Month + Day + 
+                  Sunrise_Sunset + Astronomical_Twilight + 
+                  Temperature + Weather_Condition + Humidity,
+                data = new_train,
+                family = "binomial")
+valid_pred <- valid %>%
+  mutate("lg" = predict(aic_best, newdata = valid, type = "response")) %>%
+  mutate("lg" = ifelse(lg > 0.5, "Severe", "Not Severe"))
+valid_pred %>% select(Status, lg)
+table(valid$Status)
+confusionMatrix(table(valid_pred$lg, valid_pred$Status))
 ```
 
-## (2) Sparse Logistic regression
+## (3) Sparse Logistic regression
 ```{r cache=TRUE}
 x <- model.matrix(Status ~ ., data = new_train)
 model_total <- glmnet(x, new_train$Status, family = "binomial")
@@ -205,16 +244,17 @@ plot(model_lambda)
 
 # use the best lambda
 valid_pred <- valid %>%
-  mutate("pred" = predict(model_lambda, 
+  mutate("slg" = predict(model_lambda, 
                           newx = model.matrix(Status ~ ., data = valid %>% select(-Severity)), 
                           s = "lambda.min", type = "response")[,1]) %>%
-  mutate("pred" = ifelse(pred > 0.5, "Severe", "Not Severe"))
-valid_pred %>% select(Status, pred)
+  mutate("slg" = ifelse(slg > 0.5, "Severe", "Not Severe"))
+valid_pred %>% select(Status, slg)
 table(valid$Status)
-confusionMatrix(table(valid_pred$Status, valid_pred$pred))
+confusionMatrix(table(valid_pred$slg, valid_pred$Status))
+# write_csv(valid_pred, "./results/TX_valid.csv")
 ```
 
-## (3) Random forest
+## (4) Random forest
 ```{r cache=TRUE}
 model <- randomForest(Status ~ ., data = new_train, mtry = 6, ntree = 500)
 
@@ -246,14 +286,14 @@ best_model <- randomForest(Status ~ ., data = new_train, mtry = 13, ntree = 500)
 valid_pred_rf <- valid %>%
   add_predictions(best_model)
 table(valid_pred_rf$Status)
-confusionMatrix(valid_pred_rf$Status, valid_pred_rf$pred)
+confusionMatrix(valid_pred_rf$pred, valid_pred_rf$Status)
 ```
 
-## (4) Decision tree
+## (5) Decision tree
 ```{r}
 model_decision <- rpart(Status ~ ., data = new_train, method = "class")
 
 valid_pred_dc <- valid %>%
   mutate(pred = predict(model_decision, valid, type = "class"))
-confusionMatrix(table(valid_pred_dc$Status, valid_pred_dc$pred))
+confusionMatrix(table(valid_pred_dc$pred, valid_pred_dc$Status))
 ```
