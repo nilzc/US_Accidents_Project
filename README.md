@@ -10,7 +10,7 @@ The original data can be accessed on <https://www.kaggle.com/sobhanmoosavi/us-ac
 1. Perform exploratory data analysis on this dataset and try to generate insights about traffic accidents in the U.S. 
 2. Predict accident severity levels based on traffic accident records by using various models.
 
-# Acknowledgements
+# Team Members
 Mrunmayi Anchawale, Pavan Choudhari, Maanasa Kaza and Yashvin Jagarlamudi.
 
 # Author
