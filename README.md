@@ -1,4 +1,4 @@
-# US_Accidents_Project
+# US Accidents Project
 DS 5110, Project Assignment. The results above are contributed by all members in the group.
 
 # Data Source
