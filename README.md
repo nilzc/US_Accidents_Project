@@ -14,4 +14,7 @@ The original data can be accessed on <https://www.kaggle.com/sobhanmoosavi/us-ac
 Mrunmayi Anchawale, Pavan Choudhari, Maanasa Kaza and Yashvin Jagarlamudi.
 
 # Author
-Zhuocheng Lin, zhuochengg.lin@gmail.com, https://www.kaggle.com/zhuochenglin, https://www.linkedin.com/in/zhuocheng-lin-4608251a3/
+Zhuocheng Lin, 
+zhuochengg.lin@gmail.com, 
+https://www.kaggle.com/zhuochenglin, 
+https://www.linkedin.com/in/zhuocheng-lin-4608251a3/
