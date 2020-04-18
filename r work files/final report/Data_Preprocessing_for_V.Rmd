@@ -1,0 +1,256 @@
+---
+author: "Zhuocheng Lin"
+date: "4/10/2020"
+output: html_document
+---
+
+<style>
+h3 {
+  background-color: #616161;
+  text-indent: 20px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  color: #fff;
+}
+  
+body .main-container {
+max-width: 1800px;
+}
+
+div.plot-center {
+  width: 80%;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load packages
+
+```{r packages, message=FALSE}
+library(tidyverse)
+library(kableExtra)
+library(scales)
+library(lubridate)
+```
+
+
+```{r read, include=FALSE, message=FALSE, cache=TRUE}
+df <- read_csv('../US_Accidents_Dec19.csv', col_types = cols(.default = col_character())) %>% 
+  type_convert()
+```
+
+### Drop variables with high NA proportion
+
+Variables with NA proportion larger than 50% cannot give enough information to our analysis. These are the variables to drop:
+
+<div style="width: 400px;margin-left: auto;margin-right: auto;">
+```{r high-NA, echo=FALSE}
+df %>% summarise_all(~ mean(is.na(.))) %>% 
+  pivot_longer(1:49, names_to = "Variables to drop", values_to = "NA proportion") %>% 
+  filter(`NA proportion` >= 0.5) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+
+drop_na_cols <- c("End_Lat", "End_Lng", "Number", "Wind_Chill(F)", "Precipitation(in)")
+```
+</div>
+
+### Drop unuseful variable
+
+According to our knowledge, there are some variables like "ID", "Source" and "Timezone" will not give us insights about traffic accidents or be useful in predicting severity levels, so we can drop these variables too. These variables are shown below:
+
+```{r drop-unuseful, echo=FALSE, message=FALSE}
+# these variables are not useful in predicting Severity
+not_useful <- c("ID", "Source", "Timezone", "Airport_Code", "Weather_Timestamp", 
+                "Wind_Direction", "Description")
+df %>% select(not_useful) %>%
+  head(5) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered")) %>%
+  column_spec(1, width = "5em")
+```
+
+Here, at first we thought "Wind_Direction" should be one useful factor to our project. But when we plot its distribution under each severity level, the result shows it doesn't have a great impact on severity because the distribution is similar in each severity level. 
+
+Plus, it has 25 levels, which will add more complexity to model building part. So we decide to drop it.
+
+<div class="plot-center">
+```{r wind-direction, echo=FALSE}
+ggplot(df, aes(Wind_Direction, ..prop.., group = Severity)) +
+  geom_bar(aes(fill = Severity), position = "dodge") +
+  scale_y_continuous(labels = percent) +
+  labs(x = "Wind Direction",
+       y = "Proportion",
+       title = "Wind direction does not have a great impact on severity") +
+  theme(axis.text.x = element_text(angle = 60, vjust = 0.6))
+```
+</div>
+
+```{r include=FALSE}
+df_drop <- df %>% select(-drop_na_cols, -not_useful)
+```
+
+### Rename variables to avoid potential error
+
+A variable name containing "(" or ")" is a dangerous thing, because some functions may not be able to treat the name correctly.
+
+```{r rename}
+df_drop <-  df_drop %>%
+  rename("Distance" = `Distance(mi)`, "Temperature" = `Temperature(F)`, "Humidity" = `Humidity(%)`, 
+         "Pressure" = `Pressure(in)`, "Visibility" = `Visibility(mi)`, "Wind_Speed" = `Wind_Speed(mph)`)
+```
+
+### Transform time related variables
+
+As we can see, in the original dataset, time variables are in a format that is difficult to manipulate. Also, we will lose a lot of information if we consider date and time as a whole, because some patterns may be hidden behind this format, like hourly, weekly or monthly pattern. So we need to transform the time related variables to several new variables:
+
+```{r time-original, echo=FALSE}
+df_drop %>% select(Start_Time, End_Time) %>%
+  head(5) %>%
+  kable(caption = "The original time format") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+```
+
+
+```{r time-after, echo=FALSE}
+df_time <- df_drop %>%
+  mutate(Duration = as.numeric(End_Time - Start_Time)) %>%
+  # accident duration should be positive
+  filter(!(Duration < 0)) %>%
+  separate(Start_Time, into = c("Date", "Time"), sep = " ") %>%
+  mutate("Year" = str_sub(Date, 1, 4), "Month" = str_sub(Date, 6, 7), "Day" = str_sub(Date, 9, 10), 
+         "Wday" = as.character(wday(Date)), "Hour" = str_sub(Time, 1, 2)) %>%
+  select(-c("Date", "Time", "End_Time")) %>%
+  select(TMC, Severity, Year, Month, Day, Hour, Wday, Duration, everything())
+
+df_time %>%
+  select(Year, Month, Day, Hour, Wday, Duration) %>%
+  head(5) %>%
+  kable(align = "l",
+        caption = "Time variables after transformation") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+```
+
+### Drop weather condition NA level
+
+The "Weather_Condition" variable has a NA level, which means the weather condition information is missing. 
+
+To deal with NA values in a categorical variable, usually there are 2 methods we can use:
+
+1. Treat NA as a new level, which will not lose other features' information.
+2. Remove all records containing this variable's NA value.
+
+Before we decide, there is one interesting thing: when weather condition is missing, there is a good chance that other weather related variables will be missing too. 
+
+```{r drop-weather, echo=FALSE}
+# when Weather_Condition is missing, 
+# other variables related to weather will be missing too (most cases)
+df_time %>% filter(is.na(Weather_Condition)) %>% select(Temperature:Weather_Condition) %>%
+  head(10) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+```
+
+So it should be safe to remove all records containing NA weather condition level.
+
+```{r echo=FALSE}
+# we can drop observations whose Weather_Condition is missing
+df_weather <- df_time %>% filter(!is.na(Weather_Condition))
+```
+
+# Handle TMC NA values
+
+TMC code indicates the type of an accident, which makes it an important feature of accident records. However, when we plot the TMC distribution under each severity level, there is a large number of NA values in severity level 4.
+
+Here, since NA value seems like an important feature of severity level 4, we decide to treat NA value as a new level of TMC. 
+
+```{r TMC-NA}
+df_TMC <- df_weather %>%
+  mutate(TMC = replace_na(TMC, "NA_TMC"))
+```
+
+<div class="plot-center">
+```{r TMC-plot, echo=FALSE}
+# most TMC NAs are in level 4
+df_weather %>% 
+  ggplot(aes(factor(TMC), ..prop..)) +
+    geom_bar(aes(group = Severity, fill = factor(Severity)), show.legend = F) +
+    facet_wrap(~ Severity, scales = "free") +
+    labs(x = "TMC",
+         y = "Proportion",
+         title = "TMC distribution in each severity level") +
+    theme(axis.text.x = element_text(angle = 60, vjust = 0.6),
+          legend.position = "top") +
+  scale_fill_brewer(palette = "Set1")
+```
+</div>
+
+### Location related variables
+
+There are several variables indicating the location of the accident. Apart from the accurate coordinate, longitude and latitude, the dataset also contains state, city, county and even street address. However, they are not all useful in this project. 
+
+When we are doing exploratory data analysis, we want to find some nationwide patterns or statewide patterns from this dataset. And further analysis on city, county or street level may be done later. So, let's drop these variabls for now. 
+
+```{r location, echo=FALSE, message=FALSE}
+address <- c("Country", "City", "County", "Street", "Zipcode")
+df_TMC %>%
+  select(address) %>%
+  head(5) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+  
+df_add <- df_TMC %>% select(-address)
+```
+
+### Modify variable type
+
+When reading the data into R, some variables will not be recognized as the right type as we expected. For example, it's more reasonable to treat TMC, severity and time related variables as categorical variables than continuous variables. Also, logistic variables and be treated as categorical.
+
+```{r type}
+df_add <- df_add %>% 
+  mutate(TMC = as.character(TMC), Severity = as.character(Severity)) %>% 
+  mutate_if(is.logical, as.character)
+```
+
+### Handle NA values in continuous variables
+
+There are still some records containing NA values in continuous variables, which is not a big issue. We can replace these NA values with the mean of the corresponding variable. After replacement, we can see the summary of all continuous variables, there are no NA values now.
+
+```{r NA-continuous, echo=FALSE}
+df_mean <- df_add %>%
+  mutate_if(is.numeric, ~ replace_na(., mean(., na.rm = T)))
+
+summary(df_mean %>% select_if(is.numeric))
+```
+
+### Handle NA values in categorical variables
+
+NA values in continuous variables are handled properly, but there may be NA values in categorical variables too.
+
+We can see only a few records need to be handled (81 records in total, the NA values in the last 4 variables come from the same 80 records), so removing them is a safe method.
+
+<div style="width: 400px;margin-left: auto;margin-right: auto;">
+```{r NA-categorical, echo=FALSE}
+df_mean %>% summarise_all(~sum(is.na(.))) %>% 
+  pivot_longer(everything(), names_to = "Variable", values_to = "NA_count") %>% filter(NA_count > 0) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+```
+</div>
+
+```{r final, include=FALSE}
+df_final <- df_mean %>%
+  filter(!is.na(Side)) %>%
+  filter(!is.na(Sunrise_Sunset))
+```
+
+### Write into a csv file for future use
+
+After all the transformations above, our data is more tidy and ready to use now.
+```{r write, eval=FALSE}
+write_csv(df_final, "./tidy.csv")
+```

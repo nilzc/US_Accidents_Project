@@ -1,0 +1,335 @@
+---
+author: "Zhuocheng Lin"
+date: "4/12/2020"
+output: html_document
+---
+
+<style>
+h3 {
+  background-color: #616161;
+  text-indent: 20px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  color: #fff;
+}
+  
+body .main-container {
+max-width: 1800px;
+}
+
+div.plot-center {
+  width: 80%;
+  margin-left: auto;
+  margin-right: auto;
+} 
+
+td, th {
+    border: 1px solid grey
+}
+</style>
+
+In this section, we're going to use California state data to build various models and compare their performance.
+
+The dataset has already been properly partitioned, so now let's build some models.
+
+### Load packages and read data
+
+```{r packages, message=FALSE}
+library(tidyverse)
+library(kableExtra)
+library(scales)
+library(caret)
+library(modelr)
+library(ROSE)
+library(glmnet)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(plotly)
+```
+
+### Sampling
+
+Just one more step before we start building models. By grouping the 4 severity levels into 2 levels, now the dataset is more balanced in severity levels. However, from the plot below, we can see the records in each severity level are still not equal. 
+
+This is not a big issue actually, but with a balanced data we can better train the model and interpret the final accuracy more easily (both sensitivity and specificity need to be high to gain a higher total accuracy). So, let's apply some sampling techniques to make the data balanced.
+
+```{r, echo=FALSE, message=FALSE}
+train_set <- read_csv("../results/state_train_CA.csv", col_types = cols(.default = col_character())) %>% 
+  type_convert() %>%
+  mutate(TMC = factor(TMC), Severity = factor(Severity), Year = factor(Year), Wday = factor(Wday)) %>%
+  mutate_if(is.logical, factor) %>%
+  mutate_if(is.character, factor) %>%
+  select(-Severity)
+```
+
+<div class="plot-center">
+```{r severity-plot, echo=FALSE, fig.height=4}
+ggplot(train_set, aes(Status)) +
+  geom_bar(aes(fill = Status)) +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03)) +
+  labs(y = "Count",
+       title = "Unbalanced severity levels")
+```
+</div>
+
+Here, both oversampling and undersampling are used to make the data balanced. Also, by applying sampling techniques, we reduce the data size to a scale that is more easily to manipulate.
+
+```{r ovun}
+new_train <- ovun.sample(Status ~ ., 
+                         data = train_set, 
+                         method = "both", p = 0.5, N = 90000, seed = 1)$data %>% as_tibble()
+```
+
+
+<div class="plot-center">
+```{r ovun-plot, echo=FALSE, fig.height=4}
+ggplot(new_train, aes(Status)) +
+  geom_bar(aes(fill = Status)) +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03)) +
+  labs(y = "Count",
+       title = "Balanced severity levels")
+```
+</div>
+
+### Logistic regression
+
+Since our response variable has 2 levels now, "Severe" and "Not Severe", it's reasonable that we choose logistic regression as our base line model.
+
+To gain the best formula for logistic regression, we can apply the stepwise model selection process. Here, we cannot use the root-mean-square as our criterion, instead we can use some statistical values, like AIC or BIC. In general, BIC is more strict about variables, the final formula based on BIC will contain less perdictors than using AIC. But there is no absolute conclusion saying which one is the best. So, we just use AIC value here.
+
+```{r aic, eval=FALSE}
+# use step() to apply stepwise model selection
+model_aic <- glm(Status ~ ., data = new_train, family = "binomial")
+model_aic <- step(model_aic)
+```
+
+```{r read-aic, echo=FALSE, warning=FALSE, message=FALSE}
+model_aic <- readRDS("../results/logistic/lr_model_aic_CA.rds")
+```
+
+These variables are dropped:
+
+<div class="plot-center">
+```{r variable-aic, echo=FALSE}
+model_aic$anova[2:nrow(model_aic$anova), c(1, 6)] %>% as_tibble() %>% mutate(Step = str_sub(Step, start = 3)) %>%
+  rename("Vaiables to drop" = Step) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed" ,"bordered"))
+```
+</div>
+
+The final formula based on AIC value:
+
+```{r formula-aic, echo=FALSE}
+model_aic$call
+```
+
+Make predictions on validation dataset. Here, we choose 0.6 as the cutoff (transform probability to response variable levels) to gain a higher total accuracy.
+
+We can see the performance of logistic regresson by using confusion matrix.
+
+<div class="plot-center">
+```{r prerdict, echo=FALSE, message=FALSE}
+valid_set <- read_csv("../results/logistic/lr_valid_pred_CA.csv")
+
+valid_pred <- valid_set %>%
+  mutate(pred = ifelse(pred > 0.6, "Severe", "Not Severe"))
+
+cm <- confusionMatrix(table(valid_pred$pred, valid_pred$Status))
+tibble("Accuracy" = cm$overall[[1]], "Sensitivity" = cm$byClass[[1]],
+          "Specificity" = cm$byClass[[2]], "Positive term" = cm$positive) %>%
+  kable(align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+cm
+```
+</div>
+
+From the result above, we can see the performance of normal logistic regression is not satisfying. Let's try a different model.
+
+### Sparse logistic regression
+
+Since we have so many variables in our dataset, it's possible that some of the variables' coefficients may be near zero in the final best model. So, we decide to try sparse logistic model next.
+
+Sparse logistic regression uses a "Lasso" penalty: as the tuning parameter $\lambda$ increases, it'll force more variables to have coefficient zero. From the plot below, we can see the change of variables' coefficient.
+
+```{r slr-code, eval=FALSE}
+x <- model.matrix(Status ~ ., data = new_train)
+model_total <- glmnet(x, new_train$Status, family = "binomial")
+plot(model_total)
+```
+<div class="plot-center">
+```{r slr-plot, echo=FALSE}
+model_total <- readRDS("../results/slr_model_total_CA.rds")
+plot(model_total, xvar = "lambda", label = T)
+```
+</div>
+
+To get the best sparse logistic model, we need to find the best tuning parameter $\lambda$. Cross validation is used to find the best $\lambda$ here.
+
+```{r slr-code2, eval=FALSE}
+model_lambda <- cv.glmnet(x, new_train$Status, family = "binomial")
+plot(model_lambda)
+```
+
+<div class="plot-center">
+```{r slr-plot2, echo=FALSE}
+model_lambda <- readRDS("../results/slr_model_lambda_CA.rds")
+plot(model_lambda)
+```
+</div>
+
+With the best tuning parameter $\lambda$, we then build the model and make predictions on the validation dataset. We also set the cutoff as 0.6 to gain a higher total accuracy.
+
+<div class="plot-center">
+```{r valid, message=FALSE, echo=FALSE}
+valid_set <- read_csv("../results/sparse_logistic/valid_pred/slr_valid_pred_CA.csv")
+valid_pred <- valid_set %>%
+  mutate(pred = ifelse(pred > 0.6, "Severe", "Not Severe"))
+
+cm <- confusionMatrix(table(valid_pred$pred, valid_pred$Status))
+tibble("Accuracy" = cm$overall[[1]], "Sensitivity" = cm$byClass[[1]],
+          "Specificity" = cm$byClass[[2]], "Positive term" = cm$positive) %>%
+  kable(align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+cm
+```
+</div>
+
+Compared to the previous normal logistic model, it seems the performance is similar. So, sparse logistic regression cannot make better predictions in this case. We still need to explore other models.
+
+### Decision trees
+
+Some algorithms based on trees can do a good job in classification. Also, these algorithms have a built in feature selection process, which means we don't need to be very picky about our variables.
+
+Next, we are going to try decison trees, a very useful algorithm with a readily comprehensible concept. 
+
+```{r decision-code}
+model_decision <- rpart(Status ~ ., data = new_train, method = "class", minsplit = 20, cp = 0.001)
+```
+
+Usually we can plot the decision tree to see all the nodes. But here to reach a higher accuracy, we have to take many variables into account (set cp = 0.001), which makes the final tree quite complicated and cannot be easily plotted. 
+
+<div style="width: 100%;margin-left: auto;margin-right: auto;">
+```{r decision-plot, warning=FALSE, fig.width=13, fig.height=6}
+rpart.plot(model_decision, box.palette = "RdBu", shadow.col = "grey", )
+```
+</div>
+
+After we build the tree, let's make predictions on the validation dataset.
+
+<div class="plot-center">
+```{r decision-read, echo=FALSE, message=FALSE}
+valid_set <- read_csv("../results/state_valid_CA.csv", col_types = cols(.default = col_character())) %>% 
+  type_convert() %>%
+  mutate(TMC = factor(TMC), Severity = factor(Severity), Year = factor(Year), Wday = factor(Wday)) %>%
+  mutate_if(is.logical, factor) %>%
+  mutate_if(is.character, factor) %>%
+  select(-Severity)
+
+valid_pred <- valid_set %>%
+  mutate(pred = predict(model_decision, valid_set, type = "class"))
+
+cm <- confusionMatrix(table(valid_pred$pred, valid_pred$Status))
+tibble("Accuracy" = cm$overall[[1]], "Sensitivity" = cm$byClass[[1]],
+          "Specificity" = cm$byClass[[2]], "Positive term" = cm$positive) %>%
+  kable(align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+cm
+```
+</div>
+
+From the result above, we can see decision tree really gives a better performance than the previous two logistic regression model. What's more, it takes much less time to train a decision tree than logistic models.
+
+So far, decision tree is the best model we have.
+
+### Random forest
+
+As we all know, decision tree has an obvious disadvantage (not quite obvious here though) that it may have a high accuracy on training dataset but a much lower accuracy on test dataset, which is the result of overfitting. 
+
+And random forest can alleviate this overfitting effect by applying a special sampling technique called "bootstrapping". By analyzing the final out-of-bag error rate, a more practical model can be obtained. 
+
+Let's see if random forest can imporve the accuracy even better.
+```{r rf-code, eval=FALSE}
+model_rf <- randomForest(Status ~ ., data = new_train, mtry = 6, ntree = 500)
+```
+
+These two arguments here are very important:
+
+```{r rf-table, echo=FALSE}
+tibble("Name" = c("mtry", "ntree"), 
+       "Description" = c( "Number of variables randomly sampled as candidates at each split",
+                          "Number of trees to grow")) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+```
+
+To train a better random forest model, we need to find proper values for these two arguments.
+
+Use the plot below to see whether ```ntree = 500``` is enough: 
+
+<div class="plot-center">
+![](../results/random_forest/rf_err_plot/rf_err_plot_CA.png)
+</div>
+
+As we can see, as the number of trees increases, the error rate tends to be a fixed number. So, ```ntree = 500``` is enough.
+
+Let's find out the best value for ```mtry```:
+<div class="plot-center">
+![](../results/random_forest/rf_mtry/rf_mtry_CA.png)
+</div>
+
+It's obvious that ```mtry = 18``` should be the best input.
+
+Next, we use ```ntree = 500``` and ```mtry = 18``` to build the random forest model and make predictions on validation dataset.
+
+<div class="plot-center">
+```{r rf-perd, echo=FALSE, message=FALSE}
+valid_pred <- read_csv("../results/random_forest/rf_data_pred/rf_valid_pred_CA.csv")
+
+cm <- confusionMatrix(table(valid_pred$pred, valid_pred$Status))
+tibble("Accuracy" = cm$overall[[1]], "Sensitivity" = cm$byClass[[1]],
+          "Specificity" = cm$byClass[[2]], "Positive term" = cm$positive) %>%
+  kable(align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+cm
+```
+</div>
+
+According to the result above, random forest does improve the accuracy compared to decision tree. However, the time consumed by training and finding the best random forest model is tremendously longer than training a decent decision tree model.
+
+### Conclusion
+
+In conlusion, considering both performance and the time needed to train the model, I prefer using decision tree to make predictions. But if we care about nothing but accuracy, then I suppose random forest will be the winner.
+
+The table below contains the performance of each model:
+
+<div class="plot-center">
+```{r conclusion, echo=FALSE}
+tibble("Model" = c("Logistic Regression", "Sparse Logistic Regression", "Decision Tree", "Random Forest"),
+                 "Accuracy" = c(0.7154623, 0.7138375, 0.8525123, 0.8849106),
+                 "Sensitivity" = c(0.7352326, 0.7277552, 0.8523101, 0.870184),
+                 "Specificity" = c(0.6754223, 0.6856505, 0.852922, 0.9147357)) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+```
+
+```{r conclusion-plot, echo=FALSE}
+result  <- tibble("Model" = c("Logistic Regression", "Sparse Logistic Regression", "Decision Tree", "Random Forest"),
+                 "Accuracy" = c(0.7154623, 0.7138375, 0.8525123, 0.8849106),
+                 "Sensitivity" = c(0.7352326, 0.7277552, 0.8523101, 0.870184),
+                 "Specificity" = c(0.6754223, 0.6856505, 0.852922, 0.9147357)) %>%
+pivot_longer(2:4, names_to = "type", values_to = "value")
+
+g <- result %>%
+  mutate(Model = factor(Model, levels = c("Logistic Regression", "Sparse Logistic Regression", "Decision Tree", "Random Forest"))) %>%
+           ggplot(aes(type, value, fill = Model)) +
+  geom_col(position = "dodge") +
+  scale_fill_discrete(name = "Model") +
+  labs(x = "Performance",
+      y = NULL,
+      title = "Comparison of model performance")
+
+ggplotly(g)
+```
+</div>

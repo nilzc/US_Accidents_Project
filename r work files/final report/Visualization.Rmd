@@ -1,0 +1,264 @@
+---
+author: "Zhuocheng Lin"
+date: "4/11/2020"
+output: html_document
+---
+
+<style>
+h3 {
+  background-color: #616161;
+  text-indent: 20px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  color: #fff;
+}
+  
+body .main-container {
+max-width: 1800px;
+}
+
+div.plot-center {
+  width: 80%;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this section, we're going to explore this dataset and try to generate some insights through various visualization methods. Since the size of this dataset is quite large and it has 36 columns now, we can come up with as many plots as we want. But appearantly not all plots are interesting or useful. So we will only show several plots that make us interested or feel strange.
+
+### Packages
+
+```{r packages, message=FALSE}
+library(tidyverse)
+library(scales)
+library(plotly)
+library(gridExtra)
+library(modelr)
+library(tidytext)
+```
+
+```{r read, echo=FALSE, cache=TRUE, message=FALSE}
+df <- read_csv('../tidy.csv', col_types = cols(.default = col_character())) %>% 
+  type_convert() %>%
+  mutate(TMC = factor(TMC), Severity = factor(Severity), Year = factor(Year), Wday = factor(Wday)) %>%
+    mutate_if(is.logical, factor) %>%
+    mutate_if(is.character, factor)
+```
+
+### Accident count
+
+This dataset contains traffic accident records in 49 states. We can use a map to see the accident distribution from 2016 to 2019. 
+
+The top 10 states with the most accident count are highlighted in the map. Later in the modeling part we will mainly focus on these 10 states.
+
+<div class="plot-center">
+```{r accident-count-map, echo=FALSE, message=FALSE, warning=FALSE}
+states <- map_data("state") %>% as_tibble() %>% select(long, lat, group, region)
+states_abb <- read_csv("../states.csv") %>%
+  mutate(State = tolower(State)) %>%
+  select(State, Code) %>%
+  rename("State_full" = State)
+accident_count <- df %>%
+  count(State) %>%
+  left_join(states_abb, by = c("State" = "Code"))
+
+states <- states %>%
+  left_join(accident_count, by = c("region" = "State_full"))
+# top 10 states
+top_10 <- accident_count %>%
+  arrange(desc(n)) %>%
+  head(10)
+top_10 <- top_10$State %>% unlist()
+
+top_10_map <- states %>%
+  filter(State %in% top_10)
+top_10_label <- top_10_map %>%
+  group_by(region, State) %>%
+  summarise(long = mean(long), lat = mean(lat))
+
+ggplot(states, aes(long, lat, group = group)) +
+  geom_polygon(aes(fill = n), color = "#636363", size = 0.1) +
+  geom_polygon(data = top_10_map, color = "red", fill = NA, size = 0.8) +
+  scale_fill_gradient(low = "#fee5d9", high = "#de2d26",
+                      name = "Accident Count", labels = unit_format(unit = "K", scale = 1e-03)) +
+  ggrepel::geom_label_repel(mapping = aes(label = State, group = 1), data = top_10_label) +
+  theme_minimal() +
+  coord_quickmap() +
+  labs(title = "Accident distribution in the U.S.",
+       x = "Longitude",
+       y = "Latitude")
+```
+</div>
+
+<div class="plot-center">
+```{r accident-count-bar, echo=FALSE, message=FALSE}
+df %>% 
+  filter(State %in% top_10) %>%
+  count(State) %>%
+  ggplot(aes(reorder(State, n), n)) +
+  geom_col() +
+  geom_label(aes(label = n), nudge_y = -30000) +
+  labs(x = NULL, y = "Number of accidents",
+       title = "Top 10 States with the most accidents") +
+  scale_x_discrete(labels = rev(c("California", "Texas", "Florida", "South Carolina",
+                              "North Carolina", "New York", "Pennsylvania",
+                              "Michigan", "Illinois", "Georgia"))) +
+  scale_y_continuous(breaks = seq(0, 700000, 100000), labels = unit_format(unit = "K", scale = 1e-03)) +
+  coord_flip()
+```
+</div>
+
+### Distance affected by accidents
+
+The "Distance" variable in the dataset means the length of the road extent affected by the accident. We would like to know the relationship between distance and severity levels.
+
+<div class="plot-center">
+```{r distance, echo=FALSE, message=FALSE}
+df %>%
+  group_by(Severity) %>%
+  summarise(prop = mean(Distance)) %>%
+  ggplot(aes(Severity, prop, fill = !Severity %in% c(3, 4))) +
+    geom_col() +
+    labs(
+      y = "Average affected distance (mi)",
+      title = "More severe accidents tend to affect longer road distance") +
+    scale_fill_discrete(name = "Severity", labels = c("More Severe: 3 or 4", "Less Severe: 1 or 2"))
+```
+</div>
+
+### Accident count in each severity level
+
+According to our understanding, the severity level distribution in each year should be similar assuming the traffic condition does not change remarkably from 2016 to 2019. 
+
+<div class="plot-center">
+```{r accident-severity-year, echo=FALSE, message=FALSE}
+g <- df %>%
+  group_by(Year, Severity) %>%
+  count() %>%
+  group_by(Year) %>%
+  mutate(sum = sum(n)) %>%
+  mutate(Proportion = n / sum) %>%
+  ggplot(aes(Severity, Proportion)) +
+  geom_col(aes(fill = Year), position = "dodge") +
+  labs(x = "Severity",
+       y = "Proportion",
+       title = "Severity proportion changes by year",
+       subtitle = "Use zoom in tool to clearly see the change of severity level 1 and 4") +
+  scale_y_continuous(labels = percent)
+
+ggplotly(g)
+```
+</div>
+
+But the result shows from 2018 to 2019, severity level 2 has a sudden increase while level 3 has a sudden decrease, whicn seems a little strange. 
+
+Right now we still cannot give a valid explanation to this result. To answer this, we may need to do some further research, like talking to someone from the traffic data source. Because what if the rule itself to distinguish level 2 and level 3 has changed since 2018, there is no way we can confirm this by ourselves. 
+
+One more thing to bear in mind, this dataset is seriously unbalanced in different severity levels: most of the accidents are classified into level 2 and level 3.
+
+### Accident account in different time scales
+
+One interesting thing we find is that when we split the original time variable into several new variables, some patterns can be revealed by visualization.
+
+<div class="plot-center">
+```{r accident-count-month-day, echo=FALSE, message=FALSE}
+g_top <- df %>%
+  count(Month) %>%
+  ggplot(aes(Month, n)) +
+  geom_line(aes(group = 1)) +
+  geom_point() +
+  labs(y = "Count",
+       x = NULL,
+    title = "Pattern between accident counts and month & day of the week") +
+  scale_x_discrete(labels = c("Jan", "Feb", "Mar", "Apr", "May",
+                              "Jun", "Jul", "Aug", "Sep", "Oct",
+                              "Nov", "Dec")) +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03))
+
+g_bottom <- df %>%
+  ggplot(aes(Month, fill = Wday)) +
+  geom_bar(position = "dodge") +
+  scale_fill_manual(values = c("deepskyblue1", "coral1", "coral1","coral1","coral1","coral1", "deepskyblue1"),
+                    name = "Day of the week",
+                    labels = c("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")) +
+  theme(legend.position = "bottom") +
+  guides(fill = guide_legend(nrow = 1)) +
+  scale_x_discrete(labels = c("Jan", "Feb", "Mar", "Apr", "May",
+                              "Jun", "Jul", "Aug", "Sep", "Oct",
+                              "Nov", "Dec")) +
+  labs(y = "Count") +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03))
+
+grid.arrange(g_top, g_bottom, heights = c(1/4, 3/4))
+```
+</div>
+
+From this plot, the first thing we can see is that the accident count experiences an obvious increase after July and a sudden decrease in January. And from the bottom subplot, we can recognize the weekly pattern of accidents: more accidents happen during weekdays and fewer accidents happen during weekends. Also, when we look closely, after July, it seems the month has more impact on weekdays' accidents than weekends' because apparently from August to December the weekdays' accidents experience a higher increase than weekends'.
+
+The weekly pattern is easy to explain, since people are more busy during weekdays, there should be more vehicles on the road. As for the monthly pattern, we suppose this may be the result of holiday season and many schools' reopening. To answer this with certainty, further research is needed.
+
+Also, the hourly pattern of accidents is worth mentioning too.
+
+<div style="margin-left: auto; margin-right: auto;">
+```{r  accident-count-hour, echo=FALSE, message=FALSE, fig.width=13, fig.height=5}
+right <- df %>%
+  ggplot(aes(Hour, color = Wday %in% c("1", "7"), group = Wday %in% c("1", "7"))) +
+  geom_freqpoly(stat = "count") +
+  scale_color_discrete(name = "Is weekdays?", labels = c("No", "Yes")) +
+  labs(y = NULL,
+       title = " ") +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03))
+
+left <- df %>%
+  ggplot(aes(Hour, fill = !Hour %in% c("07", "08", "16", "17"))) +
+    geom_bar(show.legend = F) +
+    labs(x = "Hour",
+         y = "No of Accidents",
+         title = "Hourly Distribution of Accidents") +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03))
+
+grid.arrange(left, right, widths = c(1/2, 1/2))
+```
+</div>
+
+Is seems most accidents happen at these two intervals: 7am - 8am, 16pm - 17pm. And then when we look at the hourly patterns separately on weekdays and weekends, we notice that the previous result should be attributed to the hourly pattern on weekdays because 7am - 8am and 16pm - 17pm are the time when most people commute on weekdays. As for the hourly pattern on weekends, we can only conclude that most accidents happen during daytime.
+
+### The impact of weather condition on accident severity.
+
+Common sense suggests that weather condition should have a great impact on accident severity. It's reasonable to think severe accidents happen more often during bad weathers, and less severe ones happen more often during clear days. However, the result of visualization seems to be against this opinion.
+
+<div style="margin-left: auto; margin-right: auto;">
+```{r  weather, echo=FALSE, message=FALSE, fig.width=10, fig.height=5}
+weather <- df %>% group_by(Severity) %>% count(Weather_Condition) %>% mutate(n = n / sum(n)) %>% filter(n > 0.02)
+weather <- weather$Weather_Condition
+
+df %>%
+  filter(Weather_Condition %in% weather) %>%
+  group_by(Severity) %>%
+  count(Weather_Condition) %>%
+  mutate(n = n / sum(n)) %>%
+  ggplot(aes(reorder_within(Weather_Condition, n, Severity), n)) +
+  geom_col(aes(fill = !Weather_Condition == "Clear"), show.legend = F) +
+  facet_wrap(~ Severity, scales = "free_y") +
+  coord_flip() +
+  scale_x_reordered() +
+  scale_y_continuous(breaks = seq(0, 0.4, 0.05), labels = percent) +
+  geom_ref_line(h = 0.1, colour = "red", size = 1) +
+  geom_ref_line(h = 0.3, colour = "red", size = 1) +
+  labs(x = "Weather Condition",
+       y = "Proportion",
+       title = "Weather condition does not have a strong impact on accident severity")
+```
+</div>
+
+Actually, when we plot the most common weather conditions under each severity level, the distribution looks similar in each level. Only level 1 has an obvious difference that more level 1 accidents happen during clear weather. And we can see more severe accidents (level 3 and 4) also happen a lot during clear days.
+
+So, it seems the severity of an accident is not mainly affected by weather conditions. (Later in modeling part, when we analyze important predictors to include in the model, weather condition is like in the middle between the most important features and the least important ones)
+
+### Something to be careful about
+
+As you can see, this dataset is very unbalanced in different severity levels. So, when we try to discover the pattern between severity and other variables we usually use "proportion" instead of "count" to compare. This is because once we use "count" as the comparison basis, the large "count" values of severity level 2 and level 3 will cover up the patterns of level 1 and level 4 (this happens at the fouth plot, but luckily we have the zoom in tool).

@@ -1,0 +1,159 @@
+---
+author: "Zhuocheng Lin"
+date: "4/12/2020"
+output: html_document
+---
+
+<style>
+h3 {
+  background-color: #616161;
+  text-indent: 20px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  color: #fff;
+}
+  
+body .main-container {
+max-width: 1800px;
+}
+
+div.plot-center {
+  width: 80%;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+### Load packages and read data
+
+After loading the data into R, remember to make sure each variable's type is correct.
+
+```{r packages, message=FALSE}
+library(tidyverse)
+library(kableExtra)
+library(scales)
+library(caret)
+library(modelr)
+```
+
+```{r read, cache=TRUE, message=FALSE}
+df <- read_csv("../tidy.csv", col_types = cols(.default = col_character())) %>% 
+  type_convert() %>%
+  mutate(TMC = factor(TMC), Severity = factor(Severity), Year = factor(Year), Wday = factor(Wday)) %>%
+  mutate_if(is.logical, factor) %>%
+  mutate_if(is.character, factor)
+```
+
+### Narrow down to one State
+
+We choose California as our target state. Since the methods are universal, later we can implement the same modeling process to other states. 
+
+```{r data, echo=FALSE}
+df_CA <- df %>% filter(State == "CA") %>% select(-State)
+df_CA %>%
+  head(5) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  scroll_box(width = "100%")
+```
+
+### Drop weather condition or TMC levels
+
+Some weather condition or TMC levels only have a few records, which may cause issues when we split the dataset. For example, some levels may appear in training dataset but will not appear in test dataset, and when we use the model built on training dataset to make predictions on test dataset, the levels won't match.
+
+So, here we remove weather condition levels with less than 20 records and TMC levels with less than 10 records. Also, when we remove these levels from the dataset, it'll help reduce the complexity of the final model. 
+
+<div class="plot-center">
+```{r weather, echo=FALSE, message=FALSE}
+df_CA %>% count(Weather_Condition) %>% filter(n < 20) %>% select(Weather_Condition, n) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered")) %>%
+  column_spec(2, width = "10em")
+
+drop_weather <- df_CA %>% count(Weather_Condition) %>% filter(n < 20) %>% select(Weather_Condition)
+drop_weather <- drop_weather$Weather_Condition %>% unlist()
+df_CA <- df_CA %>% 
+  filter(!(Weather_Condition %in% drop_weather)) %>% 
+  mutate(Weather_Condition = factor(Weather_Condition))
+
+df_CA %>% count(TMC) %>% filter(n < 10) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered")) %>%
+  column_spec(2, width = "10em")
+
+drop_TMC <- df_CA %>% count(TMC) %>% filter(n < 10) %>% select(TMC)
+drop_TMC <- drop_TMC$TMC %>% unlist()
+df_CA <- df_CA %>% filter(!TMC %in% drop_TMC) %>% mutate(TMC = factor(TMC))
+```
+</div>
+
+### Group 4 severity levels into 2 levels
+
+Here, since the data is seriously unbalanced in different severity levels and most of the accidents are classified as level 2 and level 3, we decide to group the 4 levels into 2 levels. Level 1 and level 2 will be grouped as "Not Severe", and level 3 and level 4 will be grouped as "Severe".
+
+<div class="plot-center">
+```{r severity, echo=FALSE, fig.height=4}
+ggplot(df_CA, aes(Severity, fill = !Severity %in% c(3, 4))) +
+  geom_bar() +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03)) +
+  scale_fill_discrete(name = "Severity", labels = c("Severe: 3 or 4", "Not Severe: 1 or 2")) +
+  labs(y = "Count",
+       title = "Unbalanced severity levels")
+```
+</div>
+
+After grouping:
+
+<div class="plot-center">
+```{r add-label, echo=FALSE}
+df_label <- df_CA %>%
+  mutate("Status" = factor(ifelse(Severity == "3" | Severity == "4", "Severe", "Not Severe"), 
+                           levels = c("Not Severe", "Severe")))
+df_label %>% select(Severity, Status) %>%
+  head(5) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+```
+</div>
+
+### Near zero-variance predictors
+
+Some variables are near zero-variance, which means they cannot provide enough information for us because most of the data have the same values for these variables. What's worse, when we split the dataset, the levels in training dataset and test dataset may not match.
+
+So, we need to remove these variables:
+
+```{r nzv-code}
+nzv <- nearZeroVar(df_label, saveMetrics = T)
+```
+
+<div class="plot-center">
+```{r nzv-show, message=FALSE, cache=TRUE, echo=FALSE}
+nzv[nzv$nzv,] %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  scroll_box(width = "100%", height = "300px")
+```
+</div>
+
+```{r nzv-remove, echo=FALSE}
+nzv_cols <- rownames(nzv[nzv$nzv,])
+df_label <- df_label %>%
+  select(-all_of(nzv_cols))
+```
+
+### Partition
+
+Here, we follow the typical data analysis workflow by splitting the dataset into 3 sub datasets: training(60%), validation(20%) and test(20%).
+
+Use training dataset to build various models, and use validation dataset to compare different models and finally use test dataset to show the final performance.
+
+```{r partition}
+# reproducibility
+set.seed(1)
+df_parts <- resample_partition(df_label, c(train = 0.6, valid = 0.2, test = 0.2))
+train_set <- as_tibble(df_parts$train)
+valid_set <- as_tibble(df_parts$valid)
+test_set <- as_tibble(df_parts$test)
+```
+
+

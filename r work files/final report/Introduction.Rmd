@@ -1,0 +1,64 @@
+---
+author: "Zhuocheng Lin"
+date: "4/10/2020"
+output: html_document
+---
+
+<style>
+h3 {
+  background-color: #616161;
+  text-indent: 20px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  color: #fff;
+}
+  
+body .main-container {
+max-width: 1800px;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Data Source
+
+The dataset we use contains traffic accidents records in the U.S. from 2016 to 2019, which covers 49 states of the United States. There are about 3.0 million accident records in this data. The original data can be accessed on <https://www.kaggle.com/sobhanmoosavi/us-accidents>.
+
+### Team Members
+
+Mrunmayi Anchawale, Pavan Choudhari, Maanasa Kaza and Yashvin Jagarlamudi.
+
+### Author
+
+Zhuocheng Lin, zhuochengg.lin@gmail.com, 
+
+https://www.kaggle.com/zhuochenglin
+
+### Project Goals
+
+1. Perform exploratory data analysis on this dataset and try to generate insights about traffic accidents in the U.S. 
+2. Predict accident severity levels based on traffic accident records by using various models.
+
+### Data Overview
+
+This dataset has 2,974,335 rows and 49 columns including features like time of accident, location, weather conditions, etc. 
+
+Severity level ranges from 1 to 4, where 1 means the least severe and 4 means the most severe.
+
+First 50 records are shown below, you can access the full dataset on Kaggle.
+
+```{r include=FALSE, message=FALSE, cache=TRUE}
+library(tidyverse)
+df <- read_csv("../US_Accidents_Dec19.csv", col_types = cols(.default = col_character())) %>% 
+  type_convert()
+```
+
+```{r echo=FALSE, message=FALSE}
+library(DT)
+datatable(df[1:50, ], options = list(pageLength = 5, scrollX = TRUE, searching = FALSE,
+                                     autoWidth = TRUE,
+                                     columnDefs = list(list(width = '200px', targets = c(12))) 
+                                     ))
+```
