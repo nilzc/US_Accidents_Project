@@ -18,4 +18,4 @@ Zhuocheng Lin, zhuochengg.lin@gmail.com,
 
 https://www.kaggle.com/zhuochenglin, 
 
-https://www.linkedin.com/in/zhuocheng-lin-4608251a3/
+https://www.linkedin.com/in/zhuocheng-lin/
